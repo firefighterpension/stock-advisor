@@ -171,6 +171,13 @@ def fan_chart(res: dict) -> go.Figure:
     return fig
 
 
+def get_retirement() -> dict:
+    try:
+        return dict(st.secrets.get("retirement", {}))
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def spark_data(tickers: tuple) -> dict:
     out = {}
@@ -196,14 +203,20 @@ def sparkline_fig(s: pd.Series) -> go.Figure:
     return fig
 
 
-def allocation_donut(positions: list, total: float) -> go.Figure:
+def allocation_donut(positions: list, total: float, flag_tickers: set | None = None) -> go.Figure:
     alloc = sorted(positions, key=lambda x: -x["weight"])
+
+    def _color(p):
+        if p["weight"] >= 0.40 and (flag_tickers is None or p["ticker"] in flag_tickers):
+            return SELL
+        return INK
+
     fig = go.Figure(go.Pie(
         labels=[p["ticker"] for p in alloc],
         values=[p["value"] for p in alloc],
         hole=0.58, textinfo="percent", textposition="inside",
         textfont=dict(size=11, color="#fff"),
-        marker=dict(colors=[SELL if p["weight"] >= 0.40 else INK for p in alloc],
+        marker=dict(colors=[_color(p) for p in alloc],
                     line=dict(color="#F3F6F8", width=2)),
         hovertemplate="%{label}: %{percent} (%{value:$,.0f})<extra></extra>"))
     fig.update_layout(
@@ -300,7 +313,7 @@ with gear:
             value=st.session_state.api_key or os.getenv("ANTHROPIC_API_KEY", ""),
             help="Only needed for written reports. Kept for this session.")
 
-tab_a, tab_p = st.tabs(["Research", "My portfolio"])
+tab_a, tab_p, tab_r = st.tabs(["Research", "My portfolio", "My 457"])
 
 # -------------------------------- research -------------------------------
 with tab_a:
@@ -421,6 +434,28 @@ with tab_p:
             st.markdown("#### Worth a look")
             for f in summ["flags"]:
                 st.markdown(f"- {f}")
+        ret = get_retirement()
+        if ret and float(ret.get("total", 0)) > 0:
+            r_total = float(ret["total"])
+            combined = [
+                {"ticker": "457 · Russell All Cap",
+                 "value": r_total * float(ret.get("russell_pct", 0)), "weight": 0.0},
+                {"ticker": "457 · Target 2055",
+                 "value": r_total * float(ret.get("target_pct", 0)), "weight": 0.0},
+            ] + [{"ticker": p["ticker"], "value": p["value"], "weight": 0.0}
+                 for p in positions]
+            grand = r_total + summ["total_value"]
+            for c in combined:
+                c["weight"] = c["value"] / grand if grand else 0.0
+            st.markdown("#### Total picture")
+            st.plotly_chart(
+                allocation_donut(combined, grand, flag_tickers={"NVDA", "MU", "PLTR", "AVGO"}),
+                use_container_width=True, config={"displayModeBar": False}, key="alloc-total")
+            nvda_w = next((c["weight"] for c in combined if c["ticker"] == "NVDA"), 0.0)
+            st.markdown(
+                f"<p class='muted'>Across everything tracked here, NVDA is {nvda_w:.0%} — "
+                "the 457's index funds dilute the single-stock risk.</p>",
+                unsafe_allow_html=True)
         st.markdown("#### Where should the next buy go?")
         buy_amt = st.number_input("Amount to allocate ($)", min_value=100, value=3000,
                                   step=100, key="buy_amt")
@@ -477,5 +512,37 @@ with tab_p:
                 st.info("Add an Anthropic API key under Settings to write reviews.")
         pick = st.selectbox("See details for", [p["ticker"] for p in positions])
         asset_view(res_map[pick], next(p for p in positions if p["ticker"] == pick), ctx="port")
+
+# -------------------------------- 457 -----------------------------------
+with tab_r:
+    ret = get_retirement()
+    if not ret or float(ret.get("total", 0)) <= 0:
+        st.markdown("<p class='muted'>No 457 data saved yet.</p>", unsafe_allow_html=True)
+    else:
+        total = float(ret["total"])
+        monthly = float(ret.get("monthly", 0))
+        as_of = ret.get("as_of", "")
+        r_name = ret.get("russell_name", "State Street Russell All Cap Index")
+        t_name = ret.get("target_name", "CalPERS Target Retirement 2055")
+        r_pct = float(ret.get("russell_pct", 0))
+        t_pct = float(ret.get("target_pct", 0))
+        st.markdown(
+            "<div class='stats'>"
+            f"<div class='stat'><div class='v'>{money(total)}</div><div class='l'>457 balance</div></div>"
+            f"<div class='stat'><div class='v'>{money(monthly)}</div><div class='l'>Invested monthly</div></div>"
+            f"<div class='stat'><div class='v'>{as_of}</div><div class='l'>Snapshot date</div></div></div>",
+            unsafe_allow_html=True)
+        for name, pct in ((r_name, r_pct), (t_name, t_pct)):
+            st.markdown(
+                f"<div class='prow'><div class='top'><span class='t' style='font-size:.95rem'>{name}</span></div>"
+                f"<div class='top' style='margin-top:.35rem'><span class='vals'>"
+                f"<span>{money(total * pct)} · {pct:.1%}</span></span></div>"
+                f"<div class='act'>~{money(monthly * pct)}/mo at the current allocation</div></div>",
+                unsafe_allow_html=True)
+        st.markdown(
+            "<p class='muted'>Values are a snapshot — they update when you update them. These are "
+            "institutional funds with no public ticker, so the engine scores your brokerage holdings; "
+            "the 457 is tracked for the full-picture view.</p>",
+            unsafe_allow_html=True)
 
 st.markdown(f"<div class='fine'>{engine.DISCLAIMER}</div>", unsafe_allow_html=True)
