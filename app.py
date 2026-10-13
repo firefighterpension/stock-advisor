@@ -421,6 +421,45 @@ with tab_p:
             st.markdown("#### Worth a look")
             for f in summ["flags"]:
                 st.markdown(f"- {f}")
+        st.markdown("#### Where should the next buy go?")
+        buy_amt = st.number_input("Amount to allocate ($)", min_value=100, value=3000,
+                                  step=100, key="buy_amt")
+        cands, skipped = [], []
+        for p in positions:
+            r = res_map.get(p["ticker"])
+            if r is None:
+                continue
+            if p["weight"] >= 0.40:
+                skipped.append((p["ticker"], p["weight"]))
+            elif r["recommendation"] in ("STRONG BUY", "BUY") and r["composite"] > 0:
+                cands.append({"ticker": p["ticker"], "score": r["composite"],
+                              "rec": r["recommendation"], "price": r["price"],
+                              "reason": headline(r)[1]})
+        if not cands:
+            st.markdown(
+                "<p class='muted'>No buys right now — every holding is a Hold/Sell or above the "
+                "40% concentration line. Sitting in cash until something earns a Buy is a valid move.</p>",
+                unsafe_allow_html=True)
+        else:
+            cands.sort(key=lambda c: -c["score"])
+            total_score = sum(c["score"] for c in cands)
+            alloc = [int(round(buy_amt * c["score"] / total_score)) for c in cands]
+            alloc[0] += buy_amt - sum(alloc)
+            for c, amt in zip(cands, alloc):
+                if amt <= 0:
+                    continue
+                shares = amt / c["price"] if c["price"] else 0
+                st.markdown(
+                    f"<div class='prow'><div class='top'><span class='t'>{c['ticker']}</span>{pill(c['rec'])}</div>"
+                    f"<div class='top' style='margin-top:.35rem'><span class='vals'>"
+                    f"<span>${amt:,} → ~{shares:.1f} shares</span></span></div>"
+                    f"<div class='act'>Score {c['score']:.0f} — {c['reason']}</div></div>",
+                    unsafe_allow_html=True)
+            if skipped:
+                st.markdown(
+                    "<p class='muted'>Skipped (above 40% concentration): "
+                    + ", ".join(f"{t} ({w:.0%})" for t, w in skipped) + ".</p>",
+                    unsafe_allow_html=True)
         if "portfolio-report" in st.session_state.reports:
             st.markdown("#### Portfolio review")
             st.markdown(st.session_state.reports["portfolio-report"])
