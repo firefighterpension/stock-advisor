@@ -38,6 +38,8 @@ div[data-testid="stForm"] {{ border: 0; padding: 0; }}
 .stTabs [data-baseweb="tab"] {{ font-weight: 600; }}
 /* holdings quick-pick */
 .hold-label {{ color: {SLATE}; font-size: .85rem; font-weight: 600; margin: 0 0 .35rem; text-transform: uppercase; letter-spacing: .04em; }}
+.spark-t {{ text-align: center; font-size: .68rem; font-weight: 700; letter-spacing: .02em; }}
+.conc {{ background: #FBEDEA; border: 1px solid #EFC5BC; color: #8C3A2B; border-radius: 10px; padding: .6rem .8rem; font-size: .88rem; margin: .8rem 0; }}
 div[data-testid="stSegmentedControl"] {{ margin-bottom: .4rem; }}
 /* hero verdict card */
 .hero {{ background: {CARD}; border: 1px solid {LINE}; border-radius: 18px; padding: 1.4rem 1.5rem 1.2rem;
@@ -169,6 +171,51 @@ def fan_chart(res: dict) -> go.Figure:
     return fig
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def spark_data(tickers: tuple) -> dict:
+    out = {}
+    for t in tickers:
+        try:
+            s = engine.load_prices(t, period="3mo").dropna()
+            out[t] = s.iloc[-60:]
+        except Exception:
+            out[t] = None
+    return out
+
+
+def sparkline_fig(s: pd.Series) -> go.Figure:
+    up = s.iloc[-1] >= s.iloc[0]
+    fig = go.Figure(go.Scatter(y=s.values, mode="lines",
+                               line=dict(color=BUY if up else SELL, width=2)))
+    fig.update_layout(height=46, margin=dict(l=2, r=2, t=4, b=2),
+                      xaxis=dict(visible=False), yaxis=dict(visible=False),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      showlegend=False)
+    fig.update_xaxes(fixedrange=True)
+    fig.update_yaxes(fixedrange=True)
+    return fig
+
+
+def allocation_donut(positions: list, total: float) -> go.Figure:
+    alloc = sorted(positions, key=lambda x: -x["weight"])
+    fig = go.Figure(go.Pie(
+        labels=[p["ticker"] for p in alloc],
+        values=[p["value"] for p in alloc],
+        hole=0.58, textinfo="percent", textposition="inside",
+        textfont=dict(size=11, color="#fff"),
+        marker=dict(colors=[SELL if p["weight"] >= 0.40 else INK for p in alloc],
+                    line=dict(color="#F3F6F8", width=2)),
+        hovertemplate="%{label}: %{percent} (%{value:$,.0f})<extra></extra>"))
+    fig.update_layout(
+        height=290, margin=dict(l=8, r=8, t=8, b=8), showlegend=True,
+        legend=dict(orientation="h", y=-0.15, font=dict(size=11)),
+        paper_bgcolor="rgba(0,0,0,0)",
+        annotations=[dict(
+            text=f"{money(total)}<br><span style='font-size:11px;color:#5B6B7A'>total</span>",
+            x=0.5, y=0.5, showarrow=False, font=dict(size=17))])
+    return fig
+
+
 def asset_view(res: dict, position: dict | None = None, ctx: str = "r"):
     p, rk = res["projection"], res["risk"]
     verdict, reason = headline(res)
@@ -268,6 +315,17 @@ with tab_a:
             except Exception as e:
                 st.error(f"Couldn't analyze {pick}: {e} Check the ticker symbol and try again.")
 
+    sparks = spark_data(tuple(HOLDINGS))
+    scols = st.columns(len(HOLDINGS))
+    for c, t in zip(scols, HOLDINGS):
+        with c:
+            st.markdown(f"<div class='spark-t'>{t}</div>", unsafe_allow_html=True)
+            s = sparks.get(t)
+            if s is not None and len(s) > 1:
+                st.plotly_chart(sparkline_fig(s), use_container_width=True,
+                                config={"displayModeBar": False, "staticPlot": True},
+                                key=f"spark-{t}")
+
     with st.form("search"):
         c1, c2 = st.columns([4, 1])
         raw = c1.text_input("Tickers", placeholder="AAPL, VTI, VFIAX", label_visibility="collapsed")
@@ -343,6 +401,14 @@ with tab_p:
             f"<div class='stat'><div class='v'>{'n/a' if beta is None else f'{beta:.2f}'}</div><div class='l'>Sensitivity to the market (beta)</div></div>"
             f"<div class='stat'><div class='v'>{len(positions)}</div><div class='l'>Holdings</div></div></div>",
             unsafe_allow_html=True)
+        st.plotly_chart(allocation_donut(positions, summ["total_value"]),
+                        use_container_width=True, config={"displayModeBar": False},
+                        key="alloc-donut")
+        for p in sorted(positions, key=lambda x: -x["weight"]):
+            if p["weight"] >= 0.40:
+                st.markdown(
+                    f"<div class='conc'>⚠ {p['ticker']} is {p['weight']:.0%} of your portfolio — above the 40% concentration line.</div>",
+                    unsafe_allow_html=True)
         for p in sorted(positions, key=lambda x: -x["value"]):
             pl = "" if p["unrealized_pl"] is None else f"{p['unrealized_pl']:+.1%}"
             st.markdown(
