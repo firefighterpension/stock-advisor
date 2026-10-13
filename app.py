@@ -237,6 +237,18 @@ def allocation_donut(positions: list, total: float, flag_tickers: set | None = N
     return fig
 
 
+def llm_keys() -> tuple[str | None, str | None]:
+    """(claude_key, gemini_key) from session, app secrets, or environment."""
+    claude = st.session_state.get("api_key") or os.getenv("ANTHROPIC_API_KEY")
+    gemini = st.session_state.get("gemini_key") or os.getenv("GEMINI_API_KEY")
+    if not gemini:
+        try:
+            gemini = st.secrets.get("GEMINI_API_KEY")
+        except Exception:
+            gemini = None
+    return claude, gemini
+
+
 def advisor_context() -> str:
     lines = []
     try:
@@ -319,21 +331,22 @@ def asset_view(res: dict, position: dict | None = None, ctx: str = "r"):
         st.markdown("#### Full report")
         st.markdown(st.session_state.reports[key])
     elif st.button("Write full report", key=btn_key):
+        ck, gk = llm_keys()
         with st.spinner("Writing report..."):
             try:
-                txt = engine.ai_asset_report(res, position, api_key=st.session_state.api_key or None)
+                txt = engine.ai_asset_report(res, position, api_key=ck, gemini_key=gk)
             except Exception as e:
                 txt = None
                 st.error(f"Report failed: {e}")
         if txt:
             st.session_state.reports[key] = txt
             st.rerun()
-        elif not (st.session_state.api_key or os.getenv("ANTHROPIC_API_KEY")):
-            st.info("Add an Anthropic API key under Settings to write full reports.")
+        elif not (ck or gk):
+            st.info("Add a free Gemini API key under Settings to write full reports.")
 
 
 # ------------------------------- state ---------------------------------
-for k, v in {"results": [], "reports": {}, "api_key": "", "days": 30, "port": None,
+for k, v in {"results": [], "reports": {}, "api_key": "", "gemini_key": "", "days": 30, "port": None,
              "hold_pick": None, "hold_pick_done": None, "chat": []}.items():
     st.session_state.setdefault(k, v)
 
@@ -345,10 +358,14 @@ with top:
 with gear:
     with st.popover("Settings"):
         st.session_state.days = st.slider("Look ahead (trading days)", 10, 252, st.session_state.days)
+        st.session_state.gemini_key = st.text_input(
+            "Gemini API key (free)", type="password",
+            value=st.session_state.gemini_key,
+            help="Free at aistudio.google.com. Powers the Ask tab and written reports. Kept for this session.")
         st.session_state.api_key = st.text_input(
-            "Anthropic API key", type="password",
+            "Anthropic API key (optional)", type="password",
             value=st.session_state.api_key or os.getenv("ANTHROPIC_API_KEY", ""),
-            help="Only needed for written reports. Kept for this session.")
+            help="Paid alternative to Gemini. Kept for this session.")
 
 tab_a, tab_p, tab_r, tab_q = st.tabs(["Research", "My portfolio", "My 457", "Ask"])
 
@@ -536,17 +553,18 @@ with tab_p:
             st.markdown("#### Portfolio review")
             st.markdown(st.session_state.reports["portfolio-report"])
         elif st.button("Write portfolio review"):
+            ck, gk = llm_keys()
             with st.spinner("Writing review..."):
                 try:
-                    txt = engine.ai_portfolio_report(positions, summ, res_map, api_key=st.session_state.api_key or None)
+                    txt = engine.ai_portfolio_report(positions, summ, res_map, api_key=ck, gemini_key=gk)
                 except Exception as e:
                     txt = None
                     st.error(f"Review failed: {e}")
             if txt:
                 st.session_state.reports["portfolio-report"] = txt
                 st.rerun()
-            elif not (st.session_state.api_key or os.getenv("ANTHROPIC_API_KEY")):
-                st.info("Add an Anthropic API key under Settings to write reviews.")
+            elif not (ck or gk):
+                st.info("Add a free Gemini API key under Settings to write reviews.")
         pick = st.selectbox("See details for", [p["ticker"] for p in positions])
         asset_view(res_map[pick], next(p for p in positions if p["ticker"] == pick), ctx="port")
 
@@ -596,16 +614,16 @@ with tab_q:
         st.session_state.chat.append({"role": "user", "content": q})
         with st.chat_message("user"):
             st.markdown(q)
-        key = st.session_state.api_key or os.getenv("ANTHROPIC_API_KEY")
+        ck, gk = llm_keys()
         with st.chat_message("assistant"):
-            if not key:
-                ans = ("Add an Anthropic API key under Settings (top right) to enable answers. "
-                       "The key stays in this session only.")
+            if not (ck or gk):
+                ans = ("Add a free Gemini API key under Settings (top right) to enable answers — "
+                       "get one at aistudio.google.com. It stays in this session only.")
                 st.info(ans)
             else:
                 with st.spinner("Thinking…"):
                     try:
-                        ans = engine.ask_advisor(q, advisor_context(), api_key=key)
+                        ans = engine.ask_advisor(q, advisor_context(), api_key=ck, gemini_key=gk)
                     except Exception as e:
                         ans = None
                         st.error(f"Couldn't get an answer: {e}")
