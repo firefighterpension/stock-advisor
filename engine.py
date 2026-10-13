@@ -444,7 +444,35 @@ def _ask_claude(prompt: str, api_key: str | None) -> str | None:
     return msg.content[0].text
 
 
-def ai_asset_report(res: dict, position: dict | None = None, api_key: str | None = None) -> str | None:
+GEMINI_MODEL = "gemini-2.5-flash"
+
+
+def _ask_gemini(prompt: str, api_key: str | None) -> str | None:
+    key = api_key or os.getenv("GEMINI_API_KEY")
+    if not key:
+        return None
+    import requests
+
+    resp = requests.post(
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={"model": GEMINI_MODEL,
+              "messages": [{"role": "user", "content": prompt}],
+              "max_tokens": 1400},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
+def _ask_llm(prompt: str, api_key: str | None = None, gemini_key: str | None = None) -> str | None:
+    """Prefer Gemini (free tier) when its key is available; otherwise Claude."""
+    if gemini_key or os.getenv("GEMINI_API_KEY"):
+        return _ask_gemini(prompt, gemini_key)
+    return _ask_claude(prompt, api_key)
+
+
+def ai_asset_report(res: dict, position: dict | None = None, api_key: str | None = None, gemini_key: str | None = None) -> str | None:
     data = {"analysis": _compact(res), "position": position}
     prompt = (
         "You are a careful, independent investment research analyst. Using ONLY the quantitative "
@@ -456,10 +484,10 @@ def ai_asset_report(res: dict, position: dict | None = None, api_key: str | None
         "in a portfolio. State limits of the data. End with a one-line note that this is not "
         "financial advice.\n\n" + json.dumps(data, default=str)
     )
-    return _ask_claude(prompt, api_key)
+    return _ask_llm(prompt, api_key, gemini_key)
 
 
-def ai_portfolio_report(positions: list[dict], summary: dict, results: dict, api_key: str | None = None) -> str | None:
+def ai_portfolio_report(positions: list[dict], summary: dict, results: dict, api_key: str | None = None, gemini_key: str | None = None) -> str | None:
     data = {
         "summary": summary,
         "positions": [
@@ -475,7 +503,7 @@ def ai_portfolio_report(positions: list[dict], summary: dict, results: dict, api
         "invent figures. End with a one-line note that this is not financial advice.\n\n"
         + json.dumps(data, default=str)
     )
-    return _ask_claude(prompt, api_key)
+    return _ask_llm(prompt, api_key, gemini_key)
 
 
 ADVISOR_BRIEF = """You are Marcel's personal investment advisor, answering in a chat box inside his portfolio app. Follow these rules strictly:
@@ -486,6 +514,6 @@ ADVISOR_BRIEF = """You are Marcel's personal investment advisor, answering in a 
 Use ONLY the portfolio context and analysis data given. Do not invent prices, news, or earnings. Keep answers tight and readable on a phone. End with a one-line note that this is not financial advice."""
 
 
-def ask_advisor(question: str, context: str, api_key: str | None = None) -> str | None:
+def ask_advisor(question: str, context: str, api_key: str | None = None, gemini_key: str | None = None) -> str | None:
     prompt = ADVISOR_BRIEF + "\n\nPortfolio context:\n" + context + "\n\nQuestion: " + question
-    return _ask_claude(prompt, api_key)
+    return _ask_llm(prompt, api_key, gemini_key)
