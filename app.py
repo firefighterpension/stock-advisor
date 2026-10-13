@@ -229,6 +229,35 @@ def allocation_donut(positions: list, total: float, flag_tickers: set | None = N
     return fig
 
 
+def advisor_context() -> str:
+    lines = []
+    try:
+        saved = dict(st.secrets.get("holdings", {}))
+    except Exception:
+        saved = {}
+    if saved:
+        lines.append("Brokerage holdings (ticker: shares):")
+        lines += [f"- {str(t).upper()}: {sh}" for t, sh in saved.items()]
+    ret = get_retirement()
+    if ret and float(ret.get("total", 0)) > 0:
+        lines.append(
+            f"457(b): ${float(ret['total']):,.0f} total — "
+            f"{ret.get('russell_name', '')} {float(ret.get('russell_pct', 0)):.1%}, "
+            f"{ret.get('target_name', '')} {float(ret.get('target_pct', 0)):.1%}. "
+            f"Contributes ${float(ret.get('monthly', 0)):,.0f}/month.")
+    if st.session_state.port:
+        positions, summ, res_map = st.session_state.port
+        lines.append("Latest engine scores:")
+        for p in sorted(positions, key=lambda x: -x["weight"]):
+            r = res_map.get(p["ticker"], {})
+            lines.append(
+                f"- {p['ticker']}: {r.get('recommendation', '?')} "
+                f"(score {r.get('composite', 0):.0f}), {p['weight']:.1%} of brokerage, "
+                f"value ${p['value']:,.0f}")
+    lines.append("Monthly contributions: $3,000 to taxable brokerage (weekly DCA), $1,700 to 457(b).")
+    return "\n".join(lines)
+
+
 def asset_view(res: dict, position: dict | None = None, ctx: str = "r"):
     p, rk = res["projection"], res["risk"]
     verdict, reason = headline(res)
@@ -297,7 +326,7 @@ def asset_view(res: dict, position: dict | None = None, ctx: str = "r"):
 
 # ------------------------------- state ---------------------------------
 for k, v in {"results": [], "reports": {}, "api_key": "", "days": 30, "port": None,
-             "hold_pick": None, "hold_pick_done": None}.items():
+             "hold_pick": None, "hold_pick_done": None, "chat": []}.items():
     st.session_state.setdefault(k, v)
 
 # -------------------------------- header --------------------------------
@@ -313,7 +342,7 @@ with gear:
             value=st.session_state.api_key or os.getenv("ANTHROPIC_API_KEY", ""),
             help="Only needed for written reports. Kept for this session.")
 
-tab_a, tab_p, tab_r = st.tabs(["Research", "My portfolio", "My 457"])
+tab_a, tab_p, tab_r, tab_q = st.tabs(["Research", "My portfolio", "My 457", "Ask"])
 
 # -------------------------------- research -------------------------------
 with tab_a:
@@ -544,5 +573,38 @@ with tab_r:
             "institutional funds with no public ticker, so the engine scores your brokerage holdings; "
             "the 457 is tracked for the full-picture view.</p>",
             unsafe_allow_html=True)
+
+# -------------------------------- ask -------------------------------------
+with tab_q:
+    st.markdown(
+        "<p class='muted'>Ask about your portfolio, a ticker, or where the next buy should go. "
+        "Answers follow your advisor rules: structural thinking, exact numbers, risk-officer honesty.</p>",
+        unsafe_allow_html=True)
+    for m in st.session_state.chat:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+    q = st.chat_input("Ask your advisor…", key="ask_box")
+    if q:
+        st.session_state.chat.append({"role": "user", "content": q})
+        with st.chat_message("user"):
+            st.markdown(q)
+        key = st.session_state.api_key or os.getenv("ANTHROPIC_API_KEY")
+        with st.chat_message("assistant"):
+            if not key:
+                ans = ("Add an Anthropic API key under Settings (top right) to enable answers. "
+                       "The key stays in this session only.")
+                st.info(ans)
+            else:
+                with st.spinner("Thinking…"):
+                    try:
+                        ans = engine.ask_advisor(q, advisor_context(), api_key=key)
+                    except Exception as e:
+                        ans = None
+                        st.error(f"Couldn't get an answer: {e}")
+                if ans:
+                    st.markdown(ans)
+                else:
+                    ans = "_No answer returned._"
+        st.session_state.chat.append({"role": "assistant", "content": ans})
 
 st.markdown(f"<div class='fine'>{engine.DISCLAIMER}</div>", unsafe_allow_html=True)
