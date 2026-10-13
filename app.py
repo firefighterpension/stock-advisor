@@ -300,9 +300,22 @@ with tab_a:
 # -------------------------------- portfolio ------------------------------
 with tab_p:
     st.markdown("<p class='muted'>Enter what you own. Cost basis is the price you paid per share.</p>", unsafe_allow_html=True)
+    if "port_default" not in st.session_state:
+        try:
+            saved = dict(st.secrets.get("holdings", {}))
+        except Exception:
+            saved = {}
+        if saved:
+            st.session_state.port_default = pd.DataFrame({
+                "Ticker": [str(k).upper() for k in saved.keys()],
+                "Shares": [float(v) for v in saved.values()],
+                "Cost per share": [float("nan")] * len(saved)})
+        else:
+            st.session_state.port_default = pd.DataFrame({
+                "Ticker": pd.Series(dtype=str), "Shares": pd.Series(dtype=float),
+                "Cost per share": pd.Series(dtype=float)})
     df = st.data_editor(
-        pd.DataFrame({"Ticker": pd.Series(dtype=str), "Shares": pd.Series(dtype=float),
-                      "Cost per share": pd.Series(dtype=float)}),
+        st.session_state.port_default,
         num_rows="dynamic", use_container_width=True, hide_index=True, key="port_editor")
     if st.button("Review portfolio", type="primary"):
         res_map, positions = {}, []
