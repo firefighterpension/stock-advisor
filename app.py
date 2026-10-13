@@ -269,6 +269,13 @@ def advisor_context() -> str:
     if saved:
         lines.append("Brokerage holdings (ticker: shares):")
         lines += [f"- {str(t).upper()}: {sh}" for t, sh in saved.items()]
+    try:
+        saved_costs = dict(st.secrets.get("costs", {}))
+    except Exception:
+        saved_costs = {}
+    if saved_costs:
+        lines.append("Cost basis per share (average cost paid):")
+        lines += [f"- {str(t).upper()}: ${float(c):,.2f}" for t, c in saved_costs.items()]
     ret = get_retirement()
     if ret and float(ret.get("total", 0)) > 0:
         lines.append(
@@ -442,10 +449,16 @@ with tab_p:
         except Exception:
             saved = {}
         if saved:
+            try:
+                saved_costs = {str(k).upper(): float(v)
+                               for k, v in dict(st.secrets.get("costs", {})).items()}
+            except Exception:
+                saved_costs = {}
             st.session_state.port_default = pd.DataFrame({
                 "Ticker": [str(k).upper() for k in saved.keys()],
                 "Shares": [float(v) for v in saved.values()],
-                "Cost per share": [float("nan")] * len(saved)})
+                "Cost per share": [saved_costs.get(str(k).upper(), float("nan"))
+                                   for k in saved.keys()]})
         else:
             st.session_state.port_default = pd.DataFrame({
                 "Ticker": pd.Series(dtype=str), "Shares": pd.Series(dtype=float),
