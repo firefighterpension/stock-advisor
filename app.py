@@ -93,6 +93,17 @@ div[data-testid="stSegmentedControl"] {{ margin-bottom: .4rem; }}
   .factor {{ grid-template-columns: 92px 1fr; }}
   .block-container {{ padding-top: 1.2rem; }}
 }}
+/* readability: bigger metrics, tabs and touch targets everywhere */
+[data-testid="stMetricValue"] {{ font-size: 1.65rem; font-weight: 700; }}
+.stTabs [data-baseweb="tab"] {{ font-size: 1.05rem; font-weight: 700; padding: .55rem .7rem; }}
+.stButton > button, .stFormSubmitButton > button {{ min-height: 3rem; font-size: 1rem; }}
+@media (max-width: 640px) {{
+  html {{ font-size: 17.5px; }}
+  .block-container {{ padding-left: .9rem; padding-right: .9rem; padding-top: 1.2rem; }}
+  h1 {{ font-size: 1.7rem; }}
+  [data-testid="stMetricValue"] {{ font-size: 1.45rem; }}
+  .stat .v {{ font-size: 1.35rem; }}
+}}
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -301,7 +312,7 @@ def asset_view(res: dict, position: dict | None = None, ctx: str = "r"):
     )
     with st.container():
         st.markdown("<div class='chart-card'>", unsafe_allow_html=True)
-        st.plotly_chart(fan_chart(res), use_container_width=True, config={"displayModeBar": False}, key=f"chart-{ctx}-{res['ticker']}")
+        st.plotly_chart(fan_chart(res), width="stretch", config={"displayModeBar": False}, key=f"chart-{ctx}-{res['ticker']}")
         st.markdown("</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='muted'>Dotted red line: review level near {money(res['review_level'])}, where a drop is unusual enough to re-check your thesis.</div>", unsafe_allow_html=True)
 
@@ -389,14 +400,14 @@ with tab_a:
             st.markdown(f"<div class='spark-t'>{t}</div>", unsafe_allow_html=True)
             s = sparks.get(t)
             if s is not None and len(s) > 1:
-                st.plotly_chart(sparkline_fig(s), use_container_width=True,
+                st.plotly_chart(sparkline_fig(s), width="stretch",
                                 config={"displayModeBar": False, "staticPlot": True},
                                 key=f"spark-{t}")
 
     with st.form("search"):
         c1, c2 = st.columns([4, 1])
         raw = c1.text_input("Tickers", placeholder="AAPL, VTI, VFIAX", label_visibility="collapsed")
-        go_btn = c2.form_submit_button("Analyze", type="primary", use_container_width=True)
+        go_btn = c2.form_submit_button("Analyze", type="primary", width="stretch")
     if go_btn and raw.strip():
         st.session_state.hold_pick_done = None
         results = []
@@ -441,23 +452,38 @@ with tab_p:
                 "Cost per share": pd.Series(dtype=float)})
     df = st.data_editor(
         st.session_state.port_default,
-        num_rows="dynamic", use_container_width=True, hide_index=True, key="port_editor")
-    if st.button("Review portfolio", type="primary"):
+        num_rows="dynamic", width="stretch", hide_index=True, key="port_editor")
+    def build_portfolio(frame, quiet=False):
         res_map, positions = {}, []
-        for _, row in df.dropna(subset=["Ticker", "Shares"]).iterrows():
+        for _, row in frame.dropna(subset=["Ticker", "Shares"]).iterrows():
             t = str(row["Ticker"]).strip().upper()
             if not t:
                 continue
             try:
-                with st.spinner(f"Analyzing {t}..."):
+                if quiet:
                     res_map[t] = run_analysis(t, st.session_state.days)
+                else:
+                    with st.spinner(f"Analyzing {t}..."):
+                        res_map[t] = run_analysis(t, st.session_state.days)
                 cost = row["Cost per share"]
                 positions.append(engine.position_view(res_map[t], float(row["Shares"]),
                                                       float(cost) if pd.notna(cost) else 0.0))
             except Exception as e:
                 st.error(f"Couldn't analyze {t}: {e} Check the ticker symbol and try again.")
         if positions:
-            st.session_state.port = (positions, engine.portfolio_summary(positions, res_map), res_map)
+            return (positions, engine.portfolio_summary(positions, res_map), res_map)
+        return None
+
+    if st.button("Review portfolio", type="primary"):
+        built = build_portfolio(df)
+        if built:
+            st.session_state.port = built
+    elif st.session_state.port is None and not st.session_state.get("port_tried"):
+        st.session_state.port_tried = True
+        with st.spinner("Loading your portfolio…"):
+            built = build_portfolio(st.session_state.port_default, quiet=True)
+        if built:
+            st.session_state.port = built
 
     if st.session_state.port:
         positions, summ, res_map = st.session_state.port
@@ -468,8 +494,13 @@ with tab_p:
             f"<div class='stat'><div class='v'>{'n/a' if beta is None else f'{beta:.2f}'}</div><div class='l'>Sensitivity to the market (beta)</div></div>"
             f"<div class='stat'><div class='v'>{len(positions)}</div><div class='l'>Holdings</div></div></div>",
             unsafe_allow_html=True)
+        if st.button("↻ Refresh prices", key="port_refresh"):
+            run_analysis.clear()
+            st.session_state.port = None
+            st.session_state.port_tried = False
+            st.rerun()
         st.plotly_chart(allocation_donut(positions, summ["total_value"]),
-                        use_container_width=True, config={"displayModeBar": False},
+                        width="stretch", config={"displayModeBar": False},
                         key="alloc-donut")
         for p in sorted(positions, key=lambda x: -x["weight"]):
             if p["weight"] >= 0.40:
@@ -504,7 +535,7 @@ with tab_p:
             st.markdown("#### Total picture")
             st.plotly_chart(
                 allocation_donut(combined, grand, flag_tickers={"NVDA", "MU", "PLTR", "AVGO"}),
-                use_container_width=True, config={"displayModeBar": False}, key="alloc-total")
+                width="stretch", config={"displayModeBar": False}, key="alloc-total")
             nvda_w = next((c["weight"] for c in combined if c["ticker"] == "NVDA"), 0.0)
             st.markdown(
                 f"<p class='muted'>Across everything tracked here, NVDA is {nvda_w:.0%} — "
@@ -587,6 +618,12 @@ with tab_r:
             f"<div class='stat'><div class='v'>{money(monthly)}</div><div class='l'>Invested monthly</div></div>"
             f"<div class='stat'><div class='v'>{as_of}</div><div class='l'>Snapshot date</div></div></div>",
             unsafe_allow_html=True)
+        slices457 = [
+            {"ticker": "457 · Russell All Cap", "value": total * r_pct, "weight": r_pct},
+            {"ticker": "457 · Target 2055", "value": total * t_pct, "weight": t_pct},
+        ]
+        st.plotly_chart(allocation_donut(slices457, total), width="stretch",
+                        config={"displayModeBar": False}, key="ret-donut")
         for name, pct in ((r_name, r_pct), (t_name, t_pct)):
             st.markdown(
                 f"<div class='prow'><div class='top'><span class='t' style='font-size:.95rem'>{name}</span></div>"
