@@ -17,6 +17,14 @@ REC_TEXT = {"STRONG BUY": "Strong buy", "BUY": "Buy", "HOLD": "Hold", "SELL": "S
 
 HOLDINGS = ["NVDA", "MU", "SWLGX", "PLTR", "AVGO", "QQQM", "SNXFX"]
 
+SLICE_COLORS = {
+    "NVDA": "#1F8A70", "MU": "#2F6F9F", "SWLGX": "#D9A441", "PLTR": "#7A5EA8",
+    "AVGO": "#C9713A", "QQQM": "#4FA3A5", "SNXFX": "#5B8C5A",
+    "457 · Russell All Cap": "#34556E", "457 · Target 2055": "#8C6D4F",
+}
+SLICE_FALLBACK = ["#1F8A70", "#2F6F9F", "#D9A441", "#7A5EA8", "#C9713A",
+                  "#4FA3A5", "#5B8C5A", "#8C6D4F", "#5B6B7A"]
+
 CSS = f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap');
@@ -206,17 +214,17 @@ def sparkline_fig(s: pd.Series) -> go.Figure:
 def allocation_donut(positions: list, total: float, flag_tickers: set | None = None) -> go.Figure:
     alloc = sorted(positions, key=lambda x: -x["weight"])
 
-    def _color(p):
+    def _color(p, i):
         if p["weight"] >= 0.40 and (flag_tickers is None or p["ticker"] in flag_tickers):
             return SELL
-        return INK
+        return SLICE_COLORS.get(p["ticker"], SLICE_FALLBACK[i % len(SLICE_FALLBACK)])
 
     fig = go.Figure(go.Pie(
         labels=[p["ticker"] for p in alloc],
         values=[p["value"] for p in alloc],
         hole=0.58, textinfo="percent", textposition="inside",
         textfont=dict(size=11, color="#fff"),
-        marker=dict(colors=[_color(p) for p in alloc],
+        marker=dict(colors=[_color(p, i) for i, p in enumerate(alloc)],
                     line=dict(color="#F3F6F8", width=2)),
         hovertemplate="%{label}: %{percent} (%{value:$,.0f})<extra></extra>"))
     fig.update_layout(
