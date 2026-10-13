@@ -476,3 +476,16 @@ def ai_portfolio_report(positions: list[dict], summary: dict, results: dict, api
         + json.dumps(data, default=str)
     )
     return _ask_claude(prompt, api_key)
+
+
+ADVISOR_BRIEF = """You are Marcel's personal investment advisor, answering in a chat box inside his portfolio app. Follow these rules strictly:
+1. Think in structural catalysts (policy, subsidies, procurement, secular demand) — never chase headlines or delayed filings.
+2. Favor low-cost compounding vehicles, strong ROE and free cash flow, secular tailwinds. No meme or speculative assets.
+3. Be mathematically rigorous: numbered actions with exact allocations and rationale. Never vague platitudes.
+4. Act as risk officer: challenge assumptions, flag concentration and overlap, consider taxes and account location (taxable brokerage vs 457(b)).
+Use ONLY the portfolio context and analysis data given. Do not invent prices, news, or earnings. Keep answers tight and readable on a phone. End with a one-line note that this is not financial advice."""
+
+
+def ask_advisor(question: str, context: str, api_key: str | None = None) -> str | None:
+    prompt = ADVISOR_BRIEF + "\n\nPortfolio context:\n" + context + "\n\nQuestion: " + question
+    return _ask_claude(prompt, api_key)
