@@ -98,11 +98,15 @@ div[data-testid="stSegmentedControl"] {{ margin-bottom: .4rem; }}
 .stTabs [data-baseweb="tab"] {{ font-size: 1.05rem; font-weight: 700; padding: .55rem .7rem; }}
 .stButton > button, .stFormSubmitButton > button {{ min-height: 3rem; font-size: 1rem; }}
 @media (max-width: 640px) {{
-  html {{ font-size: 17.5px; }}
+  html {{ font-size: 18px; }}
   .block-container {{ padding-left: .9rem; padding-right: .9rem; padding-top: 1.2rem; }}
   h1 {{ font-size: 1.7rem; }}
   [data-testid="stMetricValue"] {{ font-size: 1.45rem; }}
   .stat .v {{ font-size: 1.35rem; }}
+  .stMarkdown p, .stMarkdown li {{ font-size: 1.06rem; line-height: 1.55; }}
+  [data-testid="stSegmentedControl"] button {{ min-height: 3rem; font-size: 1.06rem; }}
+  .hold-label {{ font-size: .95rem; }}
+  .prow .t {{ font-size: 1.15rem; }}
 }}
 </style>
 """
