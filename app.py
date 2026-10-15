@@ -327,6 +327,18 @@ def smart_answer(q: str) -> str | None:
     outlook, and portfolio snapshot questions."""
     ql = q.lower()
 
+    if "last question" in ql or "previous question" in ql or "earlier question" in ql:
+        prev = [m["content"] for m in st.session_state.chat
+                if m["role"] == "user" and m["content"] != q]
+        meta = ("last question", "previous question", "earlier question")
+        if prev and not any(w in prev[-1].lower() for w in meta):
+            return smart_answer(prev[-1])
+        if not prev:
+            return ("This app starts a fresh chat on every visit, so I don't have your "
+                    "earlier question here — it also can't see our conversations elsewhere. "
+                    "Tap one of the instant-answer buttons above, or type the question itself "
+                    "and I'll pull the live data.")
+
     def ensure_port():
         if st.session_state.port:
             return st.session_state.port
@@ -818,6 +830,19 @@ with tab_q:
         "<p class='muted'>Ask about your portfolio, a ticker, or where the next buy should go. "
         "Answers follow your advisor rules: structural thinking, exact numbers, risk-officer honesty.</p>",
         unsafe_allow_html=True)
+    st.markdown("<p class='hold-label'>Tap for an instant answer</p>", unsafe_allow_html=True)
+    for i, ex in enumerate(["Will NVDA go back up?", "What could NVDA be in a year?",
+                            "Where should my next buy go?", "How is my portfolio doing?"]):
+        if st.button(ex, key=f"ask_ex_{i}", width="stretch"):
+            with st.spinner("Checking the latest data…"):
+                try:
+                    a = smart_answer(ex)
+                except Exception:
+                    a = None
+            if a:
+                st.session_state.chat.append({"role": "user", "content": ex})
+                st.session_state.chat.append({"role": "assistant", "content": a})
+                st.rerun()
     for m in st.session_state.chat:
         with st.chat_message(m["role"]):
             st.markdown(m["content"])
