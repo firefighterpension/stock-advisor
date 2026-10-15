@@ -264,6 +264,161 @@ def llm_keys() -> tuple[str | None, str | None]:
     return claude, gemini
 
 
+TICKER_ALIASES = {
+    "NVDA": ("nvidia",), "MU": ("micron",), "SWLGX": ("schwab large cap growth",),
+    "PLTR": ("palantir",), "AVGO": ("broadcom",), "QQQM": ("nasdaq 100", "nasdaq-100"),
+    "SNXFX": ("schwab 1000",),
+}
+
+
+def _detect_ticker(ql: str) -> str | None:
+    import re
+    for t in HOLDINGS:
+        if re.search(rf"\b{t.lower()}\b", ql):
+            return t
+    for t, names in TICKER_ALIASES.items():
+        if any(n in ql for n in names):
+            return t
+    return None
+
+
+def _closes(res: dict) -> list:
+    hist = res.get("history")
+    try:
+        if hasattr(hist, "columns"):
+            return [float(x) for x in hist["Close"].tolist()]
+        return [float(x) for x in list(hist)]
+    except Exception:
+        return []
+
+
+def compute_allocation(positions, res_map, amount):
+    """Split `amount` across BUY/STRONG BUY holdings proportional to score,
+    skipping any holding at 40%+ portfolio weight.
+    Returns (rows, skipped): rows are dicts with ticker/rec/dollars/shares/score/reason."""
+    cands, skipped = [], []
+    for p in positions:
+        r = res_map.get(p["ticker"])
+        if r is None:
+            continue
+        if p["weight"] >= 0.40:
+            skipped.append((p["ticker"], p["weight"]))
+        elif r["recommendation"] in ("STRONG BUY", "BUY") and r["composite"] > 0:
+            cands.append({"ticker": p["ticker"], "score": r["composite"],
+                          "rec": r["recommendation"], "price": r["price"],
+                          "reason": headline(r)[1]})
+    if not cands:
+        return [], skipped
+    cands.sort(key=lambda c: -c["score"])
+    total_score = sum(c["score"] for c in cands)
+    alloc = [int(round(amount * c["score"] / total_score)) for c in cands]
+    alloc[0] += amount - sum(alloc)
+    rows = []
+    for c, amt in zip(cands, alloc):
+        if amt <= 0:
+            continue
+        rows.append({**c, "dollars": amt,
+                     "shares": (amt / c["price"]) if c["price"] else 0})
+    return rows, skipped
+
+
+def smart_answer(q: str) -> str | None:
+    """Data-backed answers that need no AI key: next-buy allocation, ticker
+    outlook, and portfolio snapshot questions."""
+    ql = q.lower()
+
+    def ensure_port():
+        if st.session_state.port:
+            return st.session_state.port
+        built = build_portfolio(st.session_state.port_default, quiet=True)
+        if built:
+            st.session_state.port = built
+        return built
+
+    if any(w in ql for w in ("next buy", "allocate", "allocation", "where should i buy",
+                             "what should i buy", "buy next", "invest next")):
+        port = ensure_port()
+        if not port:
+            return None
+        positions, summ, res_map = port
+        import re as _re
+        nums = [float(x.replace(",", "")) for x in _re.findall(r"\d[\d,]*", ql)]
+        big = [n for n in nums if 100 <= n <= 1_000_000]
+        amount = big[0] if big else 3000.0
+        rows, skipped = compute_allocation(positions, res_map, amount)
+        if not rows:
+            return (f"**Next buy: hold off.** No holding currently rates BUY or better "
+                    f"(or all are over the 40% line), so the plan keeps the {money(amount)} in cash for now.")
+        lines = [f"**Where the next {money(amount)} goes** (split by engine score, "
+                 "skipping anything at 40%+ of the portfolio):", ""]
+        for c in rows:
+            lines.append(f"- **{c['ticker']}** — {money(c['dollars'])} (~{c['shares']:.1f} shares) — "
+                         f"score {c['score']:.0f}, {c['reason']}")
+        for t, w in skipped:
+            lines.append(f"- Skipped: **{t}** at {w:.0%} of the portfolio (concentration cap)")
+        return "\n".join(lines)
+
+    t = _detect_ticker(ql)
+    outlook_words = ("expected", "forecast", "outlook", "will it", "rise", "fall", "drop",
+                     "recover", "bounce", "back up", "go up", "go down", "should i buy",
+                     "should i sell", "buy more", "sell my", "hold or", "think")
+    if t and any(w in ql for w in outlook_words):
+        res = run_analysis(t, st.session_state.days)
+        if res.get("error"):
+            return None
+        price = res["price"]
+        proj = res.get("projection") or {}
+        fac = res.get("factors") or {}
+        closes = _closes(res)
+        lines = [f"**{t} at {money(price)} — {res['recommendation'].title()} "
+                 f"(score {res['composite']:+.0f}, {res['confidence']} confidence)**", ""]
+        moves = []
+        if len(closes) >= 2:
+            moves.append(f"{closes[-1] / closes[-2] - 1:+.1%} last session")
+        if len(closes) >= 6:
+            moves.append(f"{closes[-1] / closes[-6] - 1:+.1%} over the last 5 sessions")
+        if moves:
+            lines.append("Recent moves: " + " · ".join(moves) + ".")
+        for group in ("trend", "momentum", "valuation", "quality"):
+            notes = (fac.get(group) or {}).get("notes") or []
+            if notes:
+                lines.append(f"- **{group.title()}:** " + "; ".join(notes))
+        if proj:
+            lines += ["",
+                      f"**Next {proj.get('days', 30)} trading days — statistical range:** "
+                      f"bear {money(proj['bear'])} · base {money(proj['base'])} · bull {money(proj['bull'])}. "
+                      f"{proj.get('prob_up', 0):.0%} of simulations ended higher. "
+                      "A probability range from past behavior, not a promise."]
+        try:
+            saved = dict(st.secrets.get("holdings", {}))
+        except Exception:
+            saved = {}
+        shares = saved.get(t)
+        if shares:
+            lines += ["", f"Your position: {float(shares):,.4f} shares ≈ {money(float(shares) * price)}."]
+        lines += ["", "_Nobody can know where a stock goes next — this is what the data says, not a prediction._"]
+        return "\n".join(lines)
+
+    if "portfolio" in ql and any(w in ql for w in ("how", "total", "worth", "value", "doing", "summary", "stand")):
+        port = ensure_port()
+        if not port:
+            return None
+        positions, summ, res_map = port
+        top = max(positions, key=lambda p: p["value"])
+        lines = ["**Portfolio snapshot**", "",
+                 f"- Brokerage: **{money(summ['total_value'])}** across {len(positions)} holdings",
+                 f"- Largest: **{top['ticker']}** at {money(top['value'])} ({top['weight']:.0%})"]
+        ret = get_retirement()
+        if ret and float(ret.get("total", 0)) > 0:
+            grand = float(ret["total"]) + summ["total_value"]
+            lines.append(f"- 457(b): **{money(float(ret['total']))}** — combined total **{money(grand)}**")
+        if summ.get("flags"):
+            lines.append("- Worth a look: " + " ".join(summ["flags"]))
+        return "\n".join(lines)
+
+    return None
+
+
 def advisor_context() -> str:
     lines = []
     try:
@@ -561,35 +716,18 @@ with tab_p:
         st.markdown("#### Where should the next buy go?")
         buy_amt = st.number_input("Amount to allocate ($)", min_value=100, value=3000,
                                   step=100, key="buy_amt")
-        cands, skipped = [], []
-        for p in positions:
-            r = res_map.get(p["ticker"])
-            if r is None:
-                continue
-            if p["weight"] >= 0.40:
-                skipped.append((p["ticker"], p["weight"]))
-            elif r["recommendation"] in ("STRONG BUY", "BUY") and r["composite"] > 0:
-                cands.append({"ticker": p["ticker"], "score": r["composite"],
-                              "rec": r["recommendation"], "price": r["price"],
-                              "reason": headline(r)[1]})
-        if not cands:
+        alloc_rows, skipped = compute_allocation(positions, res_map, float(buy_amt))
+        if not alloc_rows:
             st.markdown(
                 "<p class='muted'>No buys right now — every holding is a Hold/Sell or above the "
                 "40% concentration line. Sitting in cash until something earns a Buy is a valid move.</p>",
                 unsafe_allow_html=True)
         else:
-            cands.sort(key=lambda c: -c["score"])
-            total_score = sum(c["score"] for c in cands)
-            alloc = [int(round(buy_amt * c["score"] / total_score)) for c in cands]
-            alloc[0] += buy_amt - sum(alloc)
-            for c, amt in zip(cands, alloc):
-                if amt <= 0:
-                    continue
-                shares = amt / c["price"] if c["price"] else 0
+            for c in alloc_rows:
                 st.markdown(
                     f"<div class='prow'><div class='top'><span class='t'>{c['ticker']}</span>{pill(c['rec'])}</div>"
                     f"<div class='top' style='margin-top:.35rem'><span class='vals'>"
-                    f"<span>${amt:,} → ~{shares:.1f} shares</span></span></div>"
+                    f"<span>${c['dollars']:,.0f} → ~{c['shares']:.1f} shares</span></span></div>"
                     f"<div class='act'>Score {c['score']:.0f} — {c['reason']}</div></div>",
                     unsafe_allow_html=True)
             if skipped:
@@ -670,9 +808,21 @@ with tab_q:
             st.markdown(q)
         ck, gk = llm_keys()
         with st.chat_message("assistant"):
-            if not (ck or gk):
-                ans = ("Add a free Gemini API key under Settings (top right) to enable answers — "
-                       "get one at aistudio.google.com. It stays in this session only.")
+            ans = None
+            with st.spinner("Checking the latest data…"):
+                try:
+                    ans = smart_answer(q)
+                except Exception:
+                    ans = None
+            if ans:
+                st.markdown(ans)
+            elif not (ck or gk):
+                ans = ("That question is open-ended, and the free-form advisor needs a Gemini key "
+                       "(Settings, top right — free at aistudio.google.com). But I can answer these "
+                       "right now from live data, no key needed:\n"
+                       "- \"Will NVDA go back up?\"\n"
+                       "- \"Where should my next buy go?\"\n"
+                       "- \"How is my portfolio doing?\"")
                 st.info(ans)
             else:
                 with st.spinner("Thinking…"):
