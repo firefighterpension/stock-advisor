@@ -361,9 +361,11 @@ def smart_answer(q: str) -> str | None:
     t = _detect_ticker(ql)
     outlook_words = ("expected", "forecast", "outlook", "will it", "rise", "fall", "drop",
                      "recover", "bounce", "back up", "go up", "go down", "should i buy",
-                     "should i sell", "buy more", "sell my", "hold or", "think")
+                     "should i sell", "buy more", "sell my", "hold or", "think",
+                     "could", "project", "worth in", "in a year", "next year", "a year")
     if t and any(w in ql for w in outlook_words):
-        res = run_analysis(t, st.session_state.days)
+        days = 252 if any(w in ql for w in ("year", "12 month", "12-month")) else st.session_state.days
+        res = run_analysis(t, days)
         if res.get("error"):
             return None
         price = res["price"]
@@ -384,8 +386,10 @@ def smart_answer(q: str) -> str | None:
             if notes:
                 lines.append(f"- **{group.title()}:** " + "; ".join(notes))
         if proj:
+            horizon = ("One year (252 trading days)" if days == 252
+                       else f"Next {proj.get('days', 30)} trading days")
             lines += ["",
-                      f"**Next {proj.get('days', 30)} trading days — statistical range:** "
+                      f"**{horizon} — statistical range:** "
                       f"bear {money(proj['bear'])} · base {money(proj['base'])} · bull {money(proj['bull'])}. "
                       f"{proj.get('prob_up', 0):.0%} of simulations ended higher. "
                       "A probability range from past behavior, not a promise."]
@@ -481,6 +485,22 @@ def asset_view(res: dict, position: dict | None = None, ctx: str = "r"):
         st.plotly_chart(fan_chart(res), width="stretch", config={"displayModeBar": False}, key=f"chart-{ctx}-{res['ticker']}")
         st.markdown("</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='muted'>Dotted red line: review level near {money(res['review_level'])}, where a drop is unusual enough to re-check your thesis.</div>", unsafe_allow_html=True)
+
+    st.markdown("#### One-year outlook")
+    with st.spinner("Projecting one year…"):
+        res_yr = run_analysis(res["ticker"], 252)
+    yp = res_yr.get("projection") or {}
+    if yp and not res_yr.get("error"):
+        y_price = res_yr["price"]
+        st.markdown(
+            "<div class='stats'>"
+            f"<div class='stat'><div class='v' style='color:{SELL}'>{money(yp['bear'])}</div><div class='l'>Bear case ({yp['bear'] / y_price - 1:+.0%})</div></div>"
+            f"<div class='stat'><div class='v'>{money(yp['base'])}</div><div class='l'>Base case ({yp['base'] / y_price - 1:+.0%})</div></div>"
+            f"<div class='stat'><div class='v' style='color:{BUY}'>{money(yp['bull'])}</div><div class='l'>Bull case ({yp['bull'] / y_price - 1:+.0%})</div></div>"
+            "</div>"
+            f"<p class='muted'>{yp['prob_up']:.0%} of one-year simulations ended higher. A statistical "
+            "range from the stock's own history — wider for jumpier stocks. Not a promise.</p>",
+            unsafe_allow_html=True)
 
     if position:
         pl = position["unrealized_pl"]
@@ -821,6 +841,7 @@ with tab_q:
                        "(Settings, top right — free at aistudio.google.com). But I can answer these "
                        "right now from live data, no key needed:\n"
                        "- \"Will NVDA go back up?\"\n"
+                       "- \"What could NVDA be in a year?\"\n"
                        "- \"Where should my next buy go?\"\n"
                        "- \"How is my portfolio doing?\"")
                 st.info(ans)
