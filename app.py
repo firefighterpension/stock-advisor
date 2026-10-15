@@ -7,7 +7,7 @@ import streamlit as st
 
 import engine
 
-st.set_page_config(page_title="Investment Advisor", page_icon="📈", layout="centered")
+st.set_page_config(page_title="Investment Advisor", page_icon="icon_helmet.png", layout="centered")
 
 INK, SLATE, LINE = "#14202B", "#5B6B7A", "#DCE3E8"
 BUY, HOLD, SELL = "#1F8A70", "#8A97A3", "#B8453A"
